@@ -1,0 +1,4 @@
+LIBRARY mi3di
+EXPORTS
+    DriverProc
+    modMessage

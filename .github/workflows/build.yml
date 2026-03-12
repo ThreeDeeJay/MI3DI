@@ -1,0 +1,105 @@
+name: Build MI3DI
+
+on:
+  push:
+    branches: ["**"]
+    tags:     ["v*"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} (${{ matrix.msys_env }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch:       x64
+            msys_env:   mingw64
+            pkg_arch:   x86_64
+            cpack_name: MI3DI_v1.0.0_x64
+
+          - arch:       x86
+            msys_env:   mingw32
+            pkg_arch:   i686
+            cpack_name: MI3DI_v1.0.0_x86
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msys_env }}
+          update:  true
+          install: >-
+            mingw-w64-${{ matrix.pkg_arch }}-toolchain
+            mingw-w64-${{ matrix.pkg_arch }}-cmake
+            mingw-w64-${{ matrix.pkg_arch }}-ninja
+            mingw-w64-${{ matrix.pkg_arch }}-openal
+
+      - name: Configure CMake (${{ matrix.arch }})
+        shell: msys2 {0}
+        run: |
+          mkdir -p build_${{ matrix.arch }}
+          cd build_${{ matrix.arch }}
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCPACK_PACKAGE_FILE_NAME="${{ matrix.cpack_name }}"
+
+      - name: Build (${{ matrix.arch }})
+        shell: msys2 {0}
+        run: |
+          cd build_${{ matrix.arch }}
+          ninja -v
+
+      - name: Bundle OpenAL DLL (${{ matrix.arch }})
+        shell: msys2 {0}
+        run: |
+          cd build_${{ matrix.arch }}
+          # Find and copy the OpenAL runtime so the zip is self-contained
+          OALDLL=$(find /${{ matrix.msys_env }}/bin -name "OpenAL32.dll" 2>/dev/null | head -1)
+          if [ -n "$OALDLL" ]; then
+            cp "$OALDLL" .
+            echo "Bundled $OALDLL"
+          fi
+
+      - name: Package (${{ matrix.arch }})
+        shell: msys2 {0}
+        run: |
+          cd build_${{ matrix.arch }}
+          cpack -G ZIP
+
+      - name: Upload ZIP (${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.cpack_name }}
+          path: build_${{ matrix.arch }}/${{ matrix.cpack_name }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          files: dist/**/*.zip
