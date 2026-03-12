@@ -16,7 +16,9 @@
  *   CC#93  (Chorus Depth)  → chorus aux slot gain
  */
 
-#define WIN32_LEAN_AND_MEAN
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <mmsystem.h>
 #include <mmddk.h>
@@ -384,12 +386,41 @@ static void process_short_msg(DWORD msg)
 /* ------------------------------------------------------------------ */
 /*  Driver initialisation / teardown                                   */
 /* ------------------------------------------------------------------ */
-static int g_open_count = 0;
+static int        g_open_count = 0;
 static CRITICAL_SECTION g_open_cs;
 
-static DWORD driver_open(void)
+/* Callback info saved from MIDIOPENDESC during MODM_OPEN */
+static HMIDIOUT   g_hmidi        = NULL;
+static DWORD_PTR  g_callback     = 0;
+static DWORD_PTR  g_callback_inst= 0;
+static DWORD      g_callback_flags = 0;
+
+/* Send a WinMM driver callback (MOM_OPEN, MOM_CLOSE, MOM_DONE …) */
+static void send_callback(DWORD uMsg, DWORD_PTR p1, DWORD_PTR p2)
+{
+    if (!g_callback) return;
+    DriverCallback(g_callback,
+                   g_callback_flags,
+                   (HDRVR)g_hmidi,
+                   uMsg,
+                   g_callback_inst,
+                   p1,
+                   p2);
+}
+
+static DWORD driver_open(MIDIOPENDESC *mod, DWORD flags)
 {
     EnterCriticalSection(&g_open_cs);
+
+    /* Save WinMM callback info (only the first caller matters) */
+    if (mod) {
+        g_hmidi         = mod->hMidi;
+        g_callback      = mod->dwCallback;
+        g_callback_inst = mod->dwInstance;
+        /* Flags from modMessage dwParam2 carry DCB_* bits */
+        g_callback_flags = flags & CALLBACK_TYPEMASK;
+    }
+
     if (g_open_count++ == 0) {
         log_init();
         LOG(MI3DI_FULL_VERSION " – driver opened");
@@ -400,6 +431,7 @@ static DWORD driver_open(void)
 
         if (!audio_init()) {
             LOG("driver_open: audio_init failed");
+            g_open_count = 0;
             LeaveCriticalSection(&g_open_cs);
             return MMSYSERR_ERROR;
         }
@@ -411,6 +443,8 @@ static DWORD driver_open(void)
                                       NULL, 0, NULL);
     }
     LeaveCriticalSection(&g_open_cs);
+
+    send_callback(MOM_OPEN, 0, 0);
     return MMSYSERR_NOERROR;
 }
 
@@ -439,6 +473,8 @@ static DWORD driver_close(void)
         log_close();
     }
     LeaveCriticalSection(&g_open_cs);
+
+    send_callback(MOM_CLOSE, 0, 0);
     return MMSYSERR_NOERROR;
 }
 
@@ -451,7 +487,8 @@ DWORD WINAPI modMessage(UINT  uDeviceID,
                         DWORD_PTR dwParam1,
                         DWORD_PTR dwParam2)
 {
-    (void)uDeviceID; (void)dwUser;
+    (void)uDeviceID;
+    (void)dwUser;   /* callback info is stored during MODM_OPEN via MIDIOPENDESC */
 
     switch (uMsg) {
         case MODM_GETNUMDEVS:
@@ -461,8 +498,10 @@ DWORD WINAPI modMessage(UINT  uDeviceID,
             MIDIOUTCAPSA *caps = (MIDIOUTCAPSA *)(void *)dwParam1;
             if (!caps) return MMSYSERR_INVALPARAM;
             memset(caps, 0, sizeof(*caps));
-            caps->wMid         = MM_UNMAPPED;
-            caps->wPid         = MM_PID_UNMAPPED;
+            /* 0xFFFF = MM_UNMAPPED / MM_PID_UNMAPPED – use raw values for
+             * portability; the constants are absent from some MinGW headers */
+            caps->wMid         = 0xFFFFu;
+            caps->wPid         = 0xFFFFu;
             caps->vDriverVersion = MAKELONG(MI3DI_VERSION_MINOR, MI3DI_VERSION_MAJOR);
             strncpy(caps->szPname, "MI3DI 3D MIDI Synth", MAXPNAMELEN - 1);
             caps->wTechnology  = MOD_SYNTH;
@@ -474,7 +513,7 @@ DWORD WINAPI modMessage(UINT  uDeviceID,
         }
 
         case MODM_OPEN:
-            return driver_open();
+            return driver_open((MIDIOPENDESC *)(void *)dwParam1, (DWORD)dwParam2);
 
         case MODM_CLOSE:
             return driver_close();
@@ -486,10 +525,9 @@ DWORD WINAPI modMessage(UINT  uDeviceID,
         case MODM_LONGDATA: {
             MIDIHDR *hdr = (MIDIHDR *)(void *)dwParam1;
             if (!hdr) return MMSYSERR_INVALPARAM;
-            /* SysEx – acknowledge completion */
+            /* SysEx – acknowledge buffer completion to the caller */
             hdr->dwFlags |= MHDR_DONE;
-            DriverCallback(dwUser, DCB_FUNCTION, 0, MOM_DONE,
-                           dwParam1, 0);
+            send_callback(MOM_DONE, dwParam1, 0);
             return MMSYSERR_NOERROR;
         }
 

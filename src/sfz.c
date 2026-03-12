@@ -207,6 +207,7 @@ SFZ *sfz_load(const char *path)
             /* Apply opcode */
             if      (strcmp(kk, "sample")           == 0) {
                 /* Normalise path separators */
+                target->sample[SFZ_MAX_PATH - 1] = '\0';
                 strncpy(target->sample, val, SFZ_MAX_PATH - 1);
                 for (char *p = target->sample; *p; p++)
                     if (*p == '/') *p = '\\';

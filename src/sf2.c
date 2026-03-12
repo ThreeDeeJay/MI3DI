@@ -311,8 +311,8 @@ int sf2_find_zone(SF2 *sf, int bank, int program,
         int global_ig_start = -1, global_ig_end = -1;
 
         for (int ib = ibag_start; ib < ibag_end; ib++) {
-            int igen_start = sf->instBags[ib].wInstGenNdx;
-            int igen_end   = sf->instBags[ib + 1].wInstGenNdx;
+            int igen_start = sf->instBags[ib].wGenNdx;
+            int igen_end   = sf->instBags[ib + 1].wGenNdx;
 
             /* Detect global zone: first zone without sampleID */
             sfGenAmount *sid = find_gen(sf->instGens, igen_start, igen_end, SF_GEN_SAMPLE_ID);
