@@ -389,8 +389,11 @@ static void process_short_msg(DWORD msg)
 static int        g_open_count = 0;
 static CRITICAL_SECTION g_open_cs;
 
-/* Callback info saved from MIDIOPENDESC during MODM_OPEN */
-static HMIDIOUT   g_hmidi        = NULL;
+/* Callback info saved from MIDIOPENDESC during MODM_OPEN.
+ * MIDIOPENDESC.hMidi is typed HMIDI (not HMIDIOUT), so we store it as such.
+ * It is cast to HDRVR when passed to DriverCallback, which is correct per
+ * the WinMM minidriver contract. */
+static HMIDI      g_hmidi        = NULL;
 static DWORD_PTR  g_callback     = 0;
 static DWORD_PTR  g_callback_inst= 0;
 static DWORD      g_callback_flags = 0;
